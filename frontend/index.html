@@ -1,0 +1,152 @@
+<!-- frontend/index.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Manufacturing Inventory Management System</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-light">
+
+<div class="container mt-4">
+    <h2 class="mb-4">🏭 Manufacturing Inventory Management System</h2>
+
+    <!-- Stats -->
+    <div class="row mb-4">
+        <div class="col-md-3"><div class="card bg-primary text-white p-3"><h5>Total Items</h5><h3 id="totalItems">0</h3></div></div>
+        <div class="col-md-3"><div class="card bg-success text-white p-3"><h5>Finished Goods</h5><h3 id="finishedGoods">0</h3></div></div>
+        <div class="col-md-3"><div class="card bg-secondary text-white p-3"><h5>Raw Materials</h5><h3 id="rawMaterials">0</h3></div></div>
+        <div class="col-md-3"><div class="card bg-danger text-white p-3"><h5>Total Stock</h5><h3 id="totalStock">0</h3></div></div>
+    </div>
+
+    <!-- Graph -->
+    <div class="row mb-4"><div class="col-md-12"><div class="card p-3"><h5>📊 Inventory Stock Levels</h5><canvas id="stockChart" height="100"></canvas></div></div></div>
+
+    <!-- Alerts -->
+    <h4>⚠️ Low Stock Alerts</h4>
+    <ul id="alerts" class="list-group mb-4"></ul>
+
+    <!-- Inventory Table -->
+    <h4>Inventory Items</h4>
+    <button class="btn btn-primary mb-2" onclick="addItem()">+ Add Item</button>
+    <table class="table table-bordered table-hover">
+        <thead class="table-dark">
+            <tr><th>Sr No</th><th>Name</th><th>Category</th><th>Qty</th><th>Threshold</th><th>Actions</th></tr>
+        </thead>
+        <tbody id="inventoryTable"></tbody>
+    </table>
+
+    <!-- Recent Activity -->
+    <h4>📝 Recent Activity</h4>
+    <ul id="recentActivity" class="list-group mb-4"></ul>
+</div>
+
+<script>
+let recentActivityLog = [];
+let stockChart;
+
+// SUMMARY
+async function loadSummary() {
+    const data = await (await fetch('http://localhost:3001/summary')).json();
+    document.getElementById('totalItems').innerText = data.totalItems;
+    document.getElementById('finishedGoods').innerText = data.finishedGoods;
+    document.getElementById('rawMaterials').innerText = data.rawMaterials;
+    document.getElementById('totalStock').innerText = data.totalStock;
+}
+
+// ALERTS
+async function loadAlerts() {
+    const alerts = await (await fetch('http://localhost:3001/alerts')).json();
+    const alertList = document.getElementById('alerts');
+    alertList.innerHTML = '';
+    if(alerts.length === 0){ alertList.innerHTML = '<li class="list-group-item">No Alerts</li>'; return; }
+    alerts.forEach(a => {
+        const li = document.createElement('li');
+        li.className = a.severity === "CRITICAL" ? "list-group-item list-group-item-danger" : "list-group-item list-group-item-warning";
+        li.innerText = `${a.name} - ${a.quantity}/${a.threshold} (${a.severity})`;
+        alertList.appendChild(li);
+    });
+}
+
+// INVENTORY
+async function loadInventory() {
+    const items = await (await fetch('http://localhost:3000/items')).json();
+    const table = document.getElementById('inventoryTable');
+    table.innerHTML = '';
+    items.forEach((item,index)=> {
+        table.innerHTML += `<tr>
+            <td>${index+1}</td>
+            <td>${item.name}</td>
+            <td>${item.category}</td>
+            <td>${item.quantity}</td>
+            <td>${item.threshold}</td>
+            <td>
+                <button class="btn btn-warning btn-sm" onclick="editItem(${item.id})">Edit</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteItem(${item.id})">Delete</button>
+            </td>
+        </tr>`;
+    });
+    updateStockChart(items);
+}
+
+// STOCK CHART
+function updateStockChart(items) {
+    const labels = items.map(i => i.name);
+    const data = items.map(i => i.quantity);
+    if(stockChart){ stockChart.data.labels = labels; stockChart.data.datasets[0].data = data; stockChart.update(); }
+    else{
+        const ctx = document.getElementById('stockChart').getContext('2d');
+        stockChart = new Chart(ctx, { type:'bar', data:{ labels, datasets:[{ label:'Stock Quantity', data, backgroundColor:'rgba(54, 162, 235, 0.6)'}] }, options:{ responsive:true, scales:{ y:{ beginAtZero:true } } } });
+    }
+}
+
+// RECENT ACTIVITY
+function logActivity(msg){
+    const timestamp = new Date().toLocaleTimeString();
+    recentActivityLog.unshift(`${timestamp}: ${msg}`);
+    if(recentActivityLog.length>5) recentActivityLog.pop();
+    const activityList = document.getElementById('recentActivity');
+    activityList.innerHTML = '';
+    recentActivityLog.forEach(m=>{
+        const li=document.createElement('li'); li.className='list-group-item'; li.innerText=m; activityList.appendChild(li);
+    });
+}
+
+// ADD ITEM
+async function addItem() {
+    const name = prompt("Item Name:"); if(!name) return;
+    const category = prompt("Category:")||"Uncategorized";
+    const quantity = parseInt(prompt("Quantity:"));
+    const threshold = parseInt(prompt("Threshold:"));
+    await fetch('http://localhost:3000/items',{method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name,category,quantity,threshold})});
+    logActivity(`Added item "${name}"`);
+    refresh();
+}
+
+// EDIT ITEM
+async function editItem(id){
+    const item = (await (await fetch('http://localhost:3000/items')).json()).find(i=>i.id===id);
+    const name = prompt("New Name:",item.name);
+    const category = prompt("New Category:",item.category);
+    const quantity = parseInt(prompt("New Quantity:",item.quantity));
+    const threshold = parseInt(prompt("New Threshold:",item.threshold));
+    await fetch(`http://localhost:3000/items/${id}`,{method:'PUT', headers:{'Content-Type':'application/json'},body:JSON.stringify({name,category,quantity,threshold})});
+    logActivity(`Edited item "${name}"`);
+    refresh();
+}
+
+// DELETE ITEM
+async function deleteItem(id){
+    if(!confirm("Are you sure you want to delete this item?")) return;
+    await fetch(`http://localhost:3000/items/${id}`,{method:'DELETE'});
+    logActivity(`Deleted item ID ${id}`);
+    refresh();
+}
+
+// REFRESH
+function refresh(){ loadSummary(); loadAlerts(); loadInventory(); }
+
+refresh();
+</script>
+</body>
+</html>
